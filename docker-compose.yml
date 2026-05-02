@@ -1,0 +1,116 @@
+version: "3.9"
+
+# =============================================================================
+# AI Assistant POC — Docker Compose
+# Usage:
+#   1. cp .env.example .env && edit .env (set OPENAI_API_KEY, JWT_SECRET, etc.)
+#   2. docker-compose up --build
+#   3. Open http://localhost:8080
+# =============================================================================
+
+services:
+
+  # ── PostgreSQL with pgvector extension ──────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ai_assistant_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-ai_assistant}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ai_assistant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Neo4j — System Knowledge Graph ──────────────────────────────────────────
+  neo4j:
+    image: neo4j:5-community
+    container_name: ai_assistant_neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-neo4jpassword}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+    ports:
+      - "7474:7474"   # HTTP Browser UI
+      - "7687:7687"   # Bolt protocol
+    volumes:
+      - neo4jdata:/data
+      - neo4jlogs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ── AI Assistant Spring Boot Application ────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: ai_assistant_app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-ai_assistant}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      ARTIFACTS_DIR: /app/artifacts
+      PORT: 8080
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4jpassword}
+      SKG_ENABLED: "true"
+      JAVA_OPTS: >-
+        -XX:+UseG1GC
+        -XX:MaxRAMPercentage=75
+        -Djava.security.egd=file:/dev/./urandom
+    volumes:
+      - artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  pgdata:
+    driver: local
+  artifacts:
+    driver: local
+  neo4jdata:
+    driver: local
+  neo4jlogs:
+    driver: local
+
+networks:
+  default:
+    name: ai_assistant_network

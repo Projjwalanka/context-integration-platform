@@ -1,0 +1,217 @@
+spring:
+  application:
+    name: ai-assistant-poc
+
+  # ──────────────────────────────────────────────────────
+  # Database
+  # ──────────────────────────────────────────────────────
+  data:
+    mongodb:
+      uri: mongodb+srv://cip_user:cip_password@cluster0.ggbxo0v.mongodb.net/cip_db?authSource=admin&retryWrites=true&w=majority&appName=Cluster0
+      auto-index-creation: true
+
+  # ──────────────────────────────────────────────────────
+  # Neo4j — System Knowledge Graph
+  # ──────────────────────────────────────────────────────
+  neo4j:
+    uri: ${NEO4J_URI:neo4j+s://13097eaa.databases.neo4j.io}
+    authentication:
+      username: ${NEO4J_USER:13097eaa}
+      password: ${NEO4J_PASSWORD:boHPoP2ia26WXk5ZZO2e0HSnYOqgMrurJBuNNjGa6W4}
+    connection-timeout: 5s
+    max-transaction-retry-time: 15s
+
+  # ──────────────────────────────────────────────────────
+  # Spring AI — OpenAI
+  # ──────────────────────────────────────────────────────
+  ai:
+    openai:
+      api-key: ${OPEN_AI_KEY}
+      chat:
+        options:
+          model: gpt-4o
+          temperature: 0.2       # Low temperature for factual banking assistant
+          max-tokens: 4096
+          top-p: 0.9
+      embedding:
+        options:
+          model: text-embedding-3-small   # 1536 dimensions, cost-effective
+      image:
+        options:
+          model: dall-e-3
+
+    # Pinecone vector store (managed)
+    vectorstore:
+      pinecone:
+        api-key: pcsk_36My3o_867uHPV6tMj8X4NcTnpGkwfYjYUNEeHuekgAG1tGXXDg6QJ3Q3Ym73HAvMHuegP
+        environment: ""
+        index-name: cip
+        namespace: default
+
+  # ──────────────────────────────────────────────────────
+  # Cache (Caffeine L1)
+  # ──────────────────────────────────────────────────────
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=1000,expireAfterWrite=300s
+
+  # ──────────────────────────────────────────────────────
+  # File Upload
+  # ──────────────────────────────────────────────────────
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 50MB
+      max-request-size: 50MB
+
+  # ──────────────────────────────────────────────────────
+  # Mail (SMTP — for EmailSendTool)
+  # ──────────────────────────────────────────────────────
+  mail:
+    host: ${SMTP_HOST:smtp.gmail.com}
+    port: ${SMTP_PORT:587}
+    username: ${SMTP_USER:your-email@gmail.com}
+    password: ${SMTP_PASSWORD:your-app-password}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+  # ──────────────────────────────────────────────────────
+  # Async thread pool
+  # ──────────────────────────────────────────────────────
+  task:
+    execution:
+      pool:
+        core-size: 4
+        max-size: 16
+        queue-capacity: 100
+
+# ──────────────────────────────────────────────────────
+# Application Custom Properties
+# ──────────────────────────────────────────────────────
+app:
+  jwt:
+    secret: bXlTdXBlclNlY3JldEtleUZvckpXVEF1dGhlbnRpY2F0aW9uMTIz
+    expiration-ms: 3600000          # 1 hour
+    refresh-expiration-ms: 604800000 # 7 days
+
+  encryption:
+    key: uFWGEVvtDz2Ye8iqmRVFOmEXSC9khK0NPTWMB6o5usA=   # 32-byte AES-256 key (replace with env var in prod)
+
+  chat:
+    context-window-messages: 20
+    system-prompt: |
+      You are an intelligent AI assistant for a financial services organisation.
+      You are helpful, professional, precise, and concise.
+      You have access to internal knowledge bases, project management tools, and document repositories.
+      Always cite your sources when referencing retrieved documents.
+      You follow strict data privacy and compliance guidelines.
+      If you are unsure, say so honestly — do not hallucinate.
+      Today's date: ${current.date:not set}.
+
+  guardrails:
+    rate-limit:
+      requests-per-minute: 20
+
+  artifacts:
+    output-dir: ${ARTIFACTS_DIR:./downloads}
+    base-url: /api/artifacts
+
+  skg:
+    enabled: ${SKG_ENABLED:true}
+    max-traversal-depth: 5
+    max-graph-nodes: 500
+
+  frontend-url: ${FRONTEND_URL:http://localhost:5173}
+  server-url: ${SERVER_URL:http://localhost:8080}
+  github:
+    ingestion:
+      refresh-ms: ${GITHUB_REFRESH_MS:1800000}
+
+  cdc:
+    poll-interval-ms: ${CDC_POLL_INTERVAL_MS:1800000}  # 30 min fallback poll for connectors without webhooks
+
+# ──────────────────────────────────────────────────────
+# OAuth Provider Credentials
+# Set these via environment variables or .env before enabling OAuth connectivity.
+# ──────────────────────────────────────────────────────
+oauth:
+  github:
+    client-id: ${GITHUB_CLIENT_ID:}
+    client-secret: ${GITHUB_CLIENT_SECRET:}
+
+  atlassian:
+    client-id: ${ATLASSIAN_CLIENT_ID:}
+    client-secret: ${ATLASSIAN_CLIENT_SECRET:}
+
+  microsoft:
+    client-id: ${MICROSOFT_CLIENT_ID:}
+    client-secret: ${MICROSOFT_CLIENT_SECRET:}
+
+# ──────────────────────────────────────────────────────
+# Actuator
+# ──────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  tracing:
+    enabled: false
+    sampling:
+      probability: 0.0
+  zipkin:
+    tracing:
+      export:
+        enabled: false
+
+# ──────────────────────────────────────────────────────
+# Logging
+# ──────────────────────────────────────────────────────
+logging:
+  level:
+    root: INFO
+    com.bank.aiassistant: DEBUG
+    org.springframework.ai: INFO
+    org.springframework.security: WARN
+    org.springframework.data.mongodb.core.MongoTemplate: WARN
+
+# ──────────────────────────────────────────────────────
+# Server
+# ──────────────────────────────────────────────────────
+server:
+  port: ${PORT:8080}
+  servlet:
+    context-path: /
+  compression:
+    enabled: true
+    mime-types: application/json,text/plain,text/event-stream
+  error:
+    include-message: never
+    include-stacktrace: never
+
+---
+# Profile: local (override defaults for local development)
+spring:
+  config:
+    activate:
+      on-profile: local
+
+logging:
+  level:
+    com.bank.aiassistant: DEBUG
+    org.springframework.ai: DEBUG
+

@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mvn compile *)",
+      "Bash(mvn clean *)",
+      "Bash(grep -v \"^\\\\[INFO\\\\] Running\\\\|^\\\\[INFO\\\\] up to date\\\\|^\\\\[INFO\\\\] audited\\\\|^\\\\[INFO\\\\] packages\\\\|^\\\\[INFO\\\\] Run\\\\|^\\\\[INFO\\\\] $\\\\|^\\\\[INFO\\\\] >\\\\|^\\\\[INFO\\\\] vite\\\\|^\\\\[INFO\\\\] transforming\\\\|^\\\\[INFO\\\\] rendering\\\\|^\\\\[INFO\\\\] computing\\\\|^\\\\[INFO\\\\] dist\\\\|^\\\\[INFO\\\\] ✓\\\\|^\\\\[INFO\\\\] built\")",
+      "Bash(grep -v \"^\\\\[INFO\\\\] Running\\\\|npm\\\\|audited\\\\|packages\\\\|vite\\\\|transforming\\\\|rendering\\\\|computing\\\\|dist/\\\\|built in\\\\|✓\\\\|funding\\\\|vulnerab\\\\|address\\\\|^\\\\[INFO\\\\] $\")",
+      "Bash(wait)",
+      "Bash(grep -v \"^\\\\[INFO\\\\] Copying\\\\|^\\\\[INFO\\\\] Comp\\\\|^\\\\[INFO\\\\] Recomp\\\\|^\\\\[INFO\\\\] $\")",
+      "Bash(javap -p \"/c/usbank poc development/ai-assistant-poc/target/classes/com/bank/aiassistant/security/jwt/JwtAuthenticationFilter.class\")",
+      "Bash(cmd /c \"where java\")",
+      "Bash(cmd /c \"java -version\")",
+      "Bash(cmd /c \"java -version 2>&1\")",
+      "Bash(cmd /c \"where javap 2>&1\")",
+      "Bash(/c/Users/Projj/.jdks/jdk-17/bin/javap -p \"/c/usbank poc development/ai-assistant-poc/target/classes/com/bank/aiassistant/security/jwt/JwtAuthenticationFilter.class\")",
+      "Bash(mvn dependency:build-classpath -q)",
+      "Bash(mvn exec:java -Dexec.mainClass=com.bank.aiassistant.security.jwt.JwtAuthenticationFilter)",
+      "Bash(python3 -c \"import base64, os; key = os.urandom\\(32\\); print\\(base64.b64encode\\(key\\).decode\\(\\)\\)\")",
+      "Bash(node -e \"const crypto=require\\('crypto'\\); console.log\\(crypto.randomBytes\\(32\\).toString\\('base64'\\)\\)\")",
+      "Bash(node -e \"const k='uFWGEVvtDz2Ye8iqmRVFOmEXSC9khK0NPTWMB6o5usA='; const b=Buffer.from\\(k,'base64'\\); console.log\\('Decoded bytes:', b.length, '\\(must be 16, 24, or 32 for AES\\)'\\)\")",
+      "Bash(git add *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(git commit *)",
+      "Bash(gh pr create --title 'fix\\(config\\): update Pinecone vector index name to cip' --body ' *)",
+      "Bash(mvn -q -o compile)",
+      "Bash(npx vite *)"
+    ]
+  }
+}
