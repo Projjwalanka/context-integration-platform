@@ -94,6 +94,24 @@ public class KnowledgeGraphService {
         entityRepo.deleteById(entityId);
     }
 
+    /** Hard-delete ALL entities and relationships for a tenant from MongoDB. */
+    public void clearAllForTenant(String tenantId) {
+        relationshipRepo.deleteByTenantId(tenantId);
+        entityRepo.deleteByTenantId(tenantId);
+        log.info("Cleared all KG entities and relationships for tenant={}", tenantId);
+    }
+
+    /** Retrieve all entities of a given type — used for catalog/listing queries. */
+    public GraphSubgraph findByEntityType(String tenantId, String entityType) {
+        List<KgEntity> entities = entityRepo.findByTenantIdAndEntityTypeAndDeprecatedFalse(
+                tenantId, entityType.toUpperCase());
+        if (entities.isEmpty()) return GraphSubgraph.empty();
+        List<String> ids = entities.stream().map(KgEntity::getId).limit(50).toList();
+        List<KgRelationship> rels = relationshipRepo
+                .findByTenantIdAndSourceEntityIdInAndDeprecatedFalse(tenantId, ids);
+        return new GraphSubgraph(entities, rels);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Graph Traversal — BFS up to 2 hops
     // ─────────────────────────────────────────────────────────────────────────

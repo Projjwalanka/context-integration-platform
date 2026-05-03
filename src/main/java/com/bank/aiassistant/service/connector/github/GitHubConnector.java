@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * GitHub connector that supports:
@@ -117,13 +118,24 @@ public class GitHubConnector implements DataSourceConnector {
                 org = creds.get("org");
             }
 
+            Map<String, String> selectedBranchByRepo = getSelectedRepoBranchMap(config);
             List<JsonNode> repos = fetchRepos(client, org);
+
+            // If user has selected specific repos, filter to only those
+            if (!selectedBranchByRepo.isEmpty()) {
+                repos = repos.stream()
+                        .filter(r -> selectedBranchByRepo.containsKey(r.path("full_name").asText()))
+                        .collect(Collectors.toList());
+            }
+
             log.info("GitHub fetchAll: {} repos for connector={}", repos.size(), config.getId());
 
             for (JsonNode repo : repos) {
                 String fullName = repo.path("full_name").asText();
                 String repoUrl = repo.path("html_url").asText();
-                String defaultBranch = repo.path("default_branch").asText("main");
+                // Use user-selected branch if specified, otherwise use repo default
+                String branch = selectedBranchByRepo.getOrDefault(
+                        fullName, repo.path("default_branch").asText("main"));
 
                 all.add(repoSummaryEntry(repo, config.getId()));
 
@@ -134,7 +146,7 @@ public class GitHubConnector implements DataSourceConnector {
                     all.add(Map.entry(
                             "# README - " + fullName + "\n\n" + truncated,
                             repoMeta("readme", config.getId(), fullName,
-                                    repoUrl + "/blob/" + defaultBranch + "/README.md",
+                                    repoUrl + "/blob/" + branch + "/README.md",
                                     repo.path("updated_at").asText(null))
                     ));
                 }
@@ -165,16 +177,27 @@ public class GitHubConnector implements DataSourceConnector {
             String org = getConfigValue(config, "org");
             if (org == null || org.isBlank()) org = creds.get("org");
 
+            Map<String, String> selectedBranchByRepo = getSelectedRepoBranchMap(config);
             List<JsonNode> repos = fetchRepos(client, org);
-            int repoCount = Math.min(repos.size(), MAX_REPOS_FOR_TREE);
-            log.info("GitHub fetchSourceFiles: scanning {} of {} repos for connector={}",
-                    repoCount, repos.size(), config.getId());
 
-            for (int i = 0; i < repoCount; i++) {
-                JsonNode repo = repos.get(i);
+            List<JsonNode> targetRepos;
+            if (!selectedBranchByRepo.isEmpty()) {
+                // Only scan user-selected repos
+                targetRepos = repos.stream()
+                        .filter(r -> selectedBranchByRepo.containsKey(r.path("full_name").asText()))
+                        .collect(Collectors.toList());
+            } else {
+                targetRepos = repos.subList(0, Math.min(repos.size(), MAX_REPOS_FOR_TREE));
+            }
+
+            log.info("GitHub fetchSourceFiles: scanning {} repos for connector={}",
+                    targetRepos.size(), config.getId());
+
+            for (JsonNode repo : targetRepos) {
                 String fullName = repo.path("full_name").asText();
-                String defaultBranch = repo.path("default_branch").asText("main");
-                fetchRepoTree(client, fullName, defaultBranch, config.getId(), all);
+                String branch = selectedBranchByRepo.getOrDefault(
+                        fullName, repo.path("default_branch").asText("main"));
+                fetchRepoTree(client, fullName, branch, config.getId(), all);
             }
         } catch (Exception ex) {
             log.error("GitHub fetchSourceFiles failed for connector {}: {}",
@@ -183,6 +206,30 @@ public class GitHubConnector implements DataSourceConnector {
         log.info("GitHub fetchSourceFiles: {} source files for connector={}",
                 all.size(), config.getId());
         return all;
+    }
+
+    /**
+     * Reads the selectedRepos config array and returns a map of
+     * {@code repoFullName -> branch}. Returns an empty map if no selections are stored.
+     */
+    private Map<String, String> getSelectedRepoBranchMap(ConnectorConfig config) {
+        Map<String, String> result = new LinkedHashMap<>();
+        try {
+            if (config.getConfig() == null) return result;
+            JsonNode root = objectMapper.readTree(config.getConfig());
+            JsonNode selected = root.path("selectedRepos");
+            if (!selected.isArray()) return result;
+            selected.forEach(item -> {
+                String fullName = item.path("fullName").asText(null);
+                String branch   = item.path("branch").asText(null);
+                if (fullName != null && !fullName.isBlank()) {
+                    result.put(fullName, branch != null && !branch.isBlank() ? branch : "main");
+                }
+            });
+        } catch (Exception e) {
+            log.debug("Could not parse selectedRepos from connector config: {}", e.getMessage());
+        }
+        return result;
     }
 
     private void fetchRepoTree(WebClient client, String repoFullName, String branch,
@@ -246,6 +293,55 @@ public class GitHubConnector implements DataSourceConnector {
         int dot = path.lastIndexOf('.');
         if (dot < 0) return false;
         return CODE_EXTENSIONS.contains(path.substring(dot).toLowerCase());
+    }
+
+    /**
+     * Returns a list of repositories with their available branches for the
+     * given connector. Used to populate the project/branch selector in the UI.
+     */
+    public List<Map<String, Object>> listReposWithBranches(ConnectorConfig config) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        try {
+            Map<String, String> creds = credentialService.decrypt(config.getEncryptedCredentials());
+            WebClient client = buildClient(creds);
+            String org = getConfigValue(config, "org");
+            if (org == null || org.isBlank()) org = creds.get("org");
+
+            List<JsonNode> repos = fetchRepos(client, org);
+            for (JsonNode repo : repos) {
+                String fullName     = repo.path("full_name").asText();
+                String defaultBranch = repo.path("default_branch").asText("main");
+                String description  = repo.path("description").asText("");
+                String language     = repo.path("language").asText("");
+                boolean isPrivate   = repo.path("private").asBoolean(false);
+
+                List<String> branches = fetchBranchNames(client, fullName);
+
+                Map<String, Object> entry = new java.util.LinkedHashMap<>();
+                entry.put("fullName", fullName);
+                entry.put("defaultBranch", defaultBranch);
+                entry.put("description", description);
+                entry.put("language", language);
+                entry.put("isPrivate", isPrivate);
+                entry.put("branches", branches);
+                result.add(entry);
+            }
+        } catch (Exception ex) {
+            log.error("listReposWithBranches failed for connector {}: {}", config.getId(), ex.getMessage());
+        }
+        return result;
+    }
+
+    private List<String> fetchBranchNames(WebClient client, String repoFullName) {
+        try {
+            String url = "/repos/" + repoFullName + "/branches?per_page=50";
+            JsonNode arr = objectMapper.readTree(get(client, url));
+            List<String> names = new ArrayList<>();
+            if (arr.isArray()) arr.forEach(b -> names.add(b.path("name").asText()));
+            return names;
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     private List<JsonNode> fetchRepos(WebClient client, String org) {

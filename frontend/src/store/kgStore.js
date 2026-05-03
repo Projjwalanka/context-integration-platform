@@ -72,6 +72,11 @@ const useKgStore = create((set, get) => ({
       get().fetchStats()
     } catch { /* silent */ }
   },
+
+  clearAllData: async () => {
+    await client.delete('/kg/clear-all')
+    set({ entities: [], stats: null, selectedEntity: null, neighbours: null })
+  },
 }))
 
 export default useKgStore

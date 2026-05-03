@@ -2,13 +2,21 @@ package com.bank.aiassistant.controller;
 
 import com.bank.aiassistant.context.TenantContext;
 import com.bank.aiassistant.model.entity.CdcSyncState;
+import com.bank.aiassistant.model.entity.ConnectorConfig;
 import com.bank.aiassistant.model.entity.KgEntity;
 import com.bank.aiassistant.model.entity.KgRelationship;
+import com.bank.aiassistant.model.entity.User;
+import com.bank.aiassistant.repository.ConnectorConfigRepository;
+import com.bank.aiassistant.repository.GithubContentIndexRepository;
 import com.bank.aiassistant.repository.KgEntityRepository;
 import com.bank.aiassistant.repository.KgRelationshipRepository;
+import com.bank.aiassistant.repository.UserRepository;
 import com.bank.aiassistant.service.kg.CdcSyncService;
 import com.bank.aiassistant.service.kg.KnowledgeGraphService;
+import com.bank.aiassistant.service.skg.SystemKnowledgeGraphService;
+import com.bank.aiassistant.service.vector.VectorStoreService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -23,15 +31,21 @@ import java.util.Map;
  * All operations are tenant-scoped — the tenant is derived from the
  * authenticated user's email domain automatically.
  */
+@Slf4j
 @RestController
 @RequestMapping("/api/kg")
 @RequiredArgsConstructor
 public class KnowledgeGraphController {
 
-    private final KnowledgeGraphService kgService;
-    private final CdcSyncService        cdcSyncService;
-    private final KgEntityRepository    entityRepo;
-    private final KgRelationshipRepository relRepo;
+    private final KnowledgeGraphService       kgService;
+    private final CdcSyncService              cdcSyncService;
+    private final KgEntityRepository          entityRepo;
+    private final KgRelationshipRepository    relRepo;
+    private final SystemKnowledgeGraphService skgService;
+    private final VectorStoreService          vectorStoreService;
+    private final ConnectorConfigRepository   connectorConfigRepository;
+    private final GithubContentIndexRepository githubContentIndexRepository;
+    private final UserRepository              userRepository;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Stats
@@ -101,6 +115,47 @@ public class KnowledgeGraphController {
                 .filter(e -> tenantId.equals(e.getTenantId()))
                 .ifPresent(e -> kgService.deleteEntity(tenantId, id));
         return ResponseEntity.noContent().build();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Clear All — purges every KG store for the tenant
+    // ─────────────────────────────────────────────────────────────────────────
+
+    @DeleteMapping("/clear-all")
+    public ResponseEntity<Map<String, Object>> clearAll(
+            @AuthenticationPrincipal UserDetails principal) {
+
+        String email    = principal.getUsername();
+        String tenantId = TenantContext.fromEmail(email);
+
+        // Resolve user ID for connector/document scoping
+        String ownerId = userRepository.findByEmail(email)
+                .map(User::getId)
+                .orElse(null);
+
+        // 1. Clear MongoDB KG entities and relationships
+        kgService.clearAllForTenant(tenantId);
+
+        // 2. Clear Neo4j System Knowledge Graph
+        skgService.clearTenantGraph(tenantId);
+
+        // 3. Clear Pinecone vectors and IngestionDocuments for all user connectors
+        if (ownerId != null) {
+            List<String> connectorIds = connectorConfigRepository.findByOwnerId(ownerId)
+                    .stream()
+                    .map(ConnectorConfig::getId)
+                    .toList();
+            if (!connectorIds.isEmpty()) {
+                vectorStoreService.clearForConnectors(ownerId, connectorIds);
+                githubContentIndexRepository.deleteByConnectorIdIn(connectorIds);
+            }
+        }
+
+        log.info("Cleared all knowledge graph data for tenant={} user={}", tenantId, email);
+        return ResponseEntity.ok(Map.of(
+                "message", "All knowledge graph data cleared successfully",
+                "tenant", tenantId
+        ));
     }
 
     // ─────────────────────────────────────────────────────────────────────────

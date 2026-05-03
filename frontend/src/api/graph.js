@@ -69,3 +69,13 @@ export const buildContext = (query, maxDepth = 3) =>
 
 export const fetchExplanation = (queryId) =>
   client.get(`/explain/${queryId}`).then(r => r.data)
+
+// ─── Clear All Knowledge Graph Data ──────────────────────────────────────────
+
+export const clearAllKgData = () =>
+  client.delete('/kg/clear-all').then(r => r.data)
+
+// ─── GitHub Repository Browser ────────────────────────────────────────────────
+
+export const fetchGithubRepos = (connectorId) =>
+  client.get(`/connectors/${connectorId}/github/repos`).then(r => r.data)

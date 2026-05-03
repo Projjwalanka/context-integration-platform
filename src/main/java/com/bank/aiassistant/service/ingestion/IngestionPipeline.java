@@ -7,6 +7,7 @@ import com.bank.aiassistant.repository.IngestionDocumentRepository;
 import com.bank.aiassistant.repository.IngestionJobRepository;
 import com.bank.aiassistant.service.kg.CdcSyncService;
 import com.bank.aiassistant.service.kg.EntityExtractionService;
+import com.bank.aiassistant.service.skg.SkgDocsIngestionService;
 import com.bank.aiassistant.service.vector.VectorStoreService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,12 +31,16 @@ import java.util.concurrent.CompletableFuture;
 @RequiredArgsConstructor
 public class IngestionPipeline {
 
+    /** Characters of raw text stored in {@link IngestionDocument#getTextPreview()} for KG refresh. */
+    public static final int TEXT_PREVIEW_CHARS = 6_000;
+
     private final DocumentChunker chunker;
     private final VectorStoreService vectorStoreService;
     private final IngestionJobRepository jobRepository;
     private final IngestionDocumentRepository documentRepository;
     private final EntityExtractionService entityExtractionService;
     private final CdcSyncService cdcSyncService;
+    private final SkgDocsIngestionService skgDocsIngestionService;
 
     // ─────────────────────────────────────────────────────────────────────────
     // Public API
@@ -88,20 +93,32 @@ public class IngestionPipeline {
             job.setCompletedAt(Instant.now());
             jobRepository.save(job);
 
+            // Build raw text once — used for KG extraction, SKG ingestion, and textPreview
+            String rawText = rawDocs.stream()
+                    .map(d -> d.getText() != null ? d.getText() : "")
+                    .collect(java.util.stream.Collectors.joining(" "));
+
             doc.setVectorIds(vectorIds);
             doc.setChunksCount(chunks.size());
             doc.setStatus(IngestionDocument.DocStatus.COMPLETED);
             doc.setUpdatedAt(Instant.now());
+            // Store a text preview so the KG refresh path can reconstruct Neo4j nodes
+            // without needing to fetch content back from Pinecone
+            doc.setTextPreview(rawText.length() > TEXT_PREVIEW_CHARS
+                    ? rawText.substring(0, TEXT_PREVIEW_CHARS) : rawText);
             documentRepository.save(doc);
 
-            // Async KG entity extraction — does not block ingestion completion
-            String rawText = rawDocs.stream()
-                    .map(d -> d.getText() != null ? d.getText() : "")
-                    .collect(java.util.stream.Collectors.joining(" "));
+            // Async MongoDB KG entity extraction (LLM-based NER over full chunked content)
             entityExtractionService.extractAndStore(
                     rawText, tenantId,
                     connectorId != null ? connectorId : "UPLOAD",
                     filename, "DOCUMENTS");
+
+            // Async Neo4j SKG ingestion — creates Document/Section nodes and DESCRIBES
+            // edges to technical components so business-to-technical queries can traverse
+            // from this document to the services/APIs it describes.
+            skgDocsIngestionService.ingestDocument(tenantId, filename, rawText,
+                    filename, connectorId != null ? connectorId : "UPLOAD");
 
             // Update CDC checksum for document dedup on re-upload
             String hash = Integer.toHexString(new String(fileBytes).hashCode());
@@ -128,33 +145,120 @@ public class IngestionPipeline {
         }
     }
 
+    /**
+     * Ingests a list of (text, metadata) entries into Pinecone and tracks each
+     * unique source as an {@link IngestionDocument} in MongoDB.
+     *
+     * @param texts         list of (content, metadata) entries; metadata should include
+     *                      {@code source_ref} (page/ticket identifier) for per-document tracking
+     * @param jobLabel      human-readable label for the {@link IngestionJob}
+     * @param connectorId   ID of the {@link com.bank.aiassistant.model.entity.ConnectorConfig}
+     * @param connectorType connector type string (JIRA, CONFLUENCE, etc.)
+     * @param ownerId       owner email / user identifier (used for tenant derivation and
+     *                      {@link IngestionDocument#getOwnerId()})
+     */
     @Async
     public CompletableFuture<String> ingestTexts(List<Map.Entry<String, Map<String, Object>>> texts,
-                                                  String jobLabel, String connectorType) {
-        IngestionJob job = createJob(connectorType, jobLabel);
+                                                  String jobLabel,
+                                                  String connectorId,
+                                                  String connectorType,
+                                                  String ownerId) {
+        String effectiveConnectorId = connectorId != null ? connectorId : connectorType;
+        String tenantId = TenantContext.fromEmail(ownerId);
+        IngestionJob job = createJob(effectiveConnectorId, jobLabel);
+
         try {
             job.setStatus(IngestionJob.JobStatus.RUNNING);
             job.setStartedAt(Instant.now());
             jobRepository.save(job);
 
-            List<Document> rawDocs = texts.stream()
+            // Enrich metadata so every chunk carries connector identity
+            List<Map.Entry<String, Map<String, Object>>> enriched = texts.stream().map(e -> {
+                Map<String, Object> meta = new java.util.HashMap<>(e.getValue() != null ? e.getValue() : Map.of());
+                meta.putIfAbsent("connector_id", effectiveConnectorId);
+                meta.putIfAbsent("user_id", ownerId);
+                meta.putIfAbsent("ingested_at", Instant.now().toString());
+                return Map.entry(e.getKey(), meta);
+            }).toList();
+
+            // Group entries by source_ref for per-document tracking
+            Map<String, List<Map.Entry<String, Map<String, Object>>>> bySourceRef = enriched.stream()
+                    .collect(Collectors.groupingBy(e ->
+                            (String) e.getValue().getOrDefault("source_ref", jobLabel)));
+
+            // Create an IngestionDocument record for each unique source
+            Map<String, IngestionDocument> docsBySourceRef = new java.util.LinkedHashMap<>();
+            for (Map.Entry<String, List<Map.Entry<String, Map<String, Object>>>> group : bySourceRef.entrySet()) {
+                String sourceRef = group.getKey();
+                long totalSize = group.getValue().stream()
+                        .mapToLong(e -> e.getKey().length()).sum();
+                IngestionDocument doc = documentRepository.save(IngestionDocument.builder()
+                        .fileName(sourceRef)
+                        .fileType(connectorType != null ? connectorType.toUpperCase() : "TEXT")
+                        .fileSize(totalSize)
+                        .connectorId(effectiveConnectorId)
+                        .ownerId(ownerId)
+                        .status(IngestionDocument.DocStatus.INGESTING)
+                        .build());
+                docsBySourceRef.put(sourceRef, doc);
+            }
+
+            // Chunk and embed all documents into Pinecone
+            List<Document> rawDocs = enriched.stream()
                     .map(e -> new Document(e.getKey(), e.getValue()))
                     .toList();
-
             List<Document> chunks = chunker.chunk(rawDocs, null);
             job.setChunksTotal(chunks.size());
             vectorStoreService.store(chunks);
+
+            // Update each IngestionDocument with its vector IDs and mark completed
+            for (Map.Entry<String, IngestionDocument> docEntry : docsBySourceRef.entrySet()) {
+                String sourceRef = docEntry.getKey();
+                IngestionDocument doc = docEntry.getValue();
+
+                List<String> vectorIds = chunks.stream()
+                        .filter(c -> sourceRef.equals(c.getMetadata().get("source_ref")))
+                        .map(Document::getId)
+                        .toList();
+
+                // Build doc text once — used for KG extraction, SKG ingestion, and textPreview
+                String docText = bySourceRef.get(sourceRef).stream()
+                        .map(Map.Entry::getKey)
+                        .collect(Collectors.joining(" "));
+
+                doc.setVectorIds(vectorIds);
+                doc.setChunksCount(vectorIds.size());
+                doc.setStatus(IngestionDocument.DocStatus.COMPLETED);
+                doc.setUpdatedAt(Instant.now());
+                doc.setTextPreview(docText.length() > TEXT_PREVIEW_CHARS
+                        ? docText.substring(0, TEXT_PREVIEW_CHARS) : docText);
+                documentRepository.save(doc);
+
+                // Async MongoDB KG entity extraction per source document
+                entityExtractionService.extractAndStore(docText, tenantId, effectiveConnectorId,
+                        sourceRef, connectorType != null ? connectorType.toUpperCase() : "TEXT");
+
+                // Async Neo4j SKG ingestion — so connector-sourced documents (Confluence,
+                // Jira, SharePoint, etc.) also create Document nodes and DESCRIBES edges
+                // to technical components, enabling business-to-technical traversal.
+                skgDocsIngestionService.ingestDocument(tenantId, sourceRef, docText,
+                        sourceRef, effectiveConnectorId);
+            }
 
             job.setChunksProcessed(chunks.size());
             job.setStatus(IngestionJob.JobStatus.COMPLETED);
             job.setCompletedAt(Instant.now());
             jobRepository.save(job);
 
+            log.info("ingestTexts completed: jobLabel='{}' sources={} chunks={} connector={}",
+                    jobLabel, docsBySourceRef.size(), chunks.size(), effectiveConnectorId);
             return CompletableFuture.completedFuture(job.getId());
 
         } catch (Exception ex) {
+            log.error("ingestTexts failed for '{}': {}", jobLabel, ex.getMessage(), ex);
             job.setStatus(IngestionJob.JobStatus.FAILED);
             job.setErrorMessage(ex.getMessage());
+            job.setCompletedAt(Instant.now());
             jobRepository.save(job);
             return CompletableFuture.failedFuture(ex);
         }

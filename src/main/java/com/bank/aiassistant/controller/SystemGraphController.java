@@ -189,6 +189,19 @@ public class SystemGraphController {
                         "message", "Docs ingestion started in background"));
     }
 
+    @PostMapping("/api/graph/refresh/documents")
+    public ResponseEntity<Map<String, Object>> refreshDocuments(
+            @AuthenticationPrincipal UserDetails principal) {
+
+        String tenantId = tenantId(principal);
+        String email    = principal.getUsername();
+
+        docsIngestionService.refreshUploadedDocuments(tenantId, email);
+        return ResponseEntity.accepted()
+                .body(Map.of("status", "RUNNING",
+                        "message", "Uploaded document refresh started — documents will appear in the knowledge graph shortly"));
+    }
+
     @PostMapping("/api/graph/refresh/jira")
     public ResponseEntity<Map<String, Object>> refreshJira(
             @RequestParam(required = false) String connectorId,
@@ -228,16 +241,22 @@ public class SystemGraphController {
         if (jiraCid != null) { jiraIngestionService.ingestAsync(tenantId, jiraCid); result.put("jira", jiraCid); triggered.add("JIRA"); }
         else { result.put("jira", "skipped"); skipped.add("JIRA"); }
 
-        if (triggered.isEmpty()) {
-            String msg = "No data-source connectors are configured for your account. " +
-                    "Add at least one GitHub / Confluence / Jira connector under Settings → Connectors, " +
-                    "then refresh the knowledge graph again.";
-            log.warn("refreshAll: no connectors configured for user={}", email);
-            return ResponseEntity.badRequest().body(Map.of(
-                    "status", "FAILED",
-                    "error", msg,
-                    "triggered", triggered,
-                    "skipped", skipped));
+        // Always re-ingest manually uploaded documents — no connector required
+        docsIngestionService.refreshUploadedDocuments(tenantId, email);
+        result.put("uploadedDocuments", "RUNNING");
+        triggered.add("UPLOADED_DOCUMENTS");
+
+        // Warn (but don't block) when no external connectors are configured.
+        // Uploaded documents are always refreshed regardless.
+        boolean noExternalConnectors = skipped.containsAll(List.of("GITHUB", "CONFLUENCE", "JIRA"))
+                && !triggered.contains("CODE/GITHUB")
+                && !triggered.contains("DOCS/CONFLUENCE")
+                && !triggered.contains("JIRA");
+        if (noExternalConnectors) {
+            log.warn("refreshAll: no external connectors configured for user={}", email);
+            result.put("warning", "No GitHub / Confluence / Jira connectors configured. " +
+                    "Only uploaded documents are being refreshed. " +
+                    "Add connectors under Settings → Connectors for full knowledge graph coverage.");
         }
 
         log.info("refreshAll: triggered={} skipped={} user={}", triggered, skipped, email);

@@ -1,6 +1,6 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Eye, EyeOff, TestTube2, Save, ChevronLeft, Shield, Lock, ExternalLink, CheckCircle2, AlertCircle } from 'lucide-react'
+import { X, Eye, EyeOff, TestTube2, Save, ChevronLeft, Shield, Lock, ExternalLink, CheckCircle2, AlertCircle, RefreshCw, GitBranch, Check, ChevronDown } from 'lucide-react'
 import client from '../../api/client'
 import toast from 'react-hot-toast'
 import { CONNECTOR_META } from './connectorMeta'
@@ -64,6 +64,146 @@ function TypeSelector({ onSelect }) {
   )
 }
 
+// ── GitHub Repo/Branch Selector ────────────────────────────────────────────────
+
+function GitHubRepoSelector({ connectorId, initialSelected, onChange }) {
+  const [repos, setRepos] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [selected, setSelected] = useState(initialSelected ?? []) // [{fullName, branch}]
+  const [openBranchDropdown, setOpenBranchDropdown] = useState(null)
+
+  const loadRepos = async () => {
+    setLoading(true)
+    try {
+      const { data } = await client.get(`/connectors/${connectorId}/github/repos`)
+      setRepos(data)
+    } catch {
+      toast.error('Failed to load repositories — check your credentials')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadRepos() }, [connectorId])
+
+  const isSelected = (fullName) => selected.some(s => s.fullName === fullName)
+
+  const toggleRepo = (repo) => {
+    const next = isSelected(repo.fullName)
+      ? selected.filter(s => s.fullName !== repo.fullName)
+      : [...selected, { fullName: repo.fullName, branch: repo.defaultBranch }]
+    setSelected(next)
+    onChange(next)
+  }
+
+  const setBranch = (fullName, branch) => {
+    const next = selected.map(s => s.fullName === fullName ? { ...s, branch } : s)
+    setSelected(next)
+    onChange(next)
+    setOpenBranchDropdown(null)
+  }
+
+  const selectedBranchFor = (fullName) =>
+    selected.find(s => s.fullName === fullName)?.branch ?? ''
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-xs font-semibold text-gray-700 flex items-center gap-1.5">
+          <GitBranch className="h-3.5 w-3.5 text-indigo-500" />
+          Select Repositories &amp; Branches
+        </label>
+        <button
+          type="button"
+          onClick={loadRepos}
+          disabled={loading}
+          className="text-[10px] text-indigo-600 hover:text-indigo-800 flex items-center gap-1 disabled:opacity-50"
+        >
+          <RefreshCw className={`h-2.5 w-2.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
+
+      {selected.length > 0 && (
+        <p className="text-[10px] text-gray-500">
+          {selected.length} repo{selected.length !== 1 ? 's' : ''} selected — only these will be ingested.
+          Deselect all to ingest all accessible repos.
+        </p>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-6 gap-2 text-xs text-gray-400">
+          <RefreshCw className="h-4 w-4 animate-spin" />
+          Loading repositories…
+        </div>
+      ) : repos.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-200 py-6 text-center text-xs text-gray-400">
+          No repositories found. Verify your access token has the required scopes.
+        </div>
+      ) : (
+        <div className="max-h-56 overflow-y-auto rounded-xl border border-gray-200 divide-y divide-gray-100">
+          {repos.map(repo => {
+            const sel = isSelected(repo.fullName)
+            return (
+              <div key={repo.fullName} className={`flex items-center gap-2 px-3 py-2 transition ${sel ? 'bg-indigo-50' : 'hover:bg-gray-50'}`}>
+                <button
+                  type="button"
+                  onClick={() => toggleRepo(repo)}
+                  className={`w-4 h-4 rounded flex-shrink-0 border-2 flex items-center justify-center transition ${
+                    sel ? 'bg-indigo-600 border-indigo-600' : 'border-gray-300 hover:border-indigo-400'
+                  }`}
+                >
+                  {sel && <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />}
+                </button>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-gray-800 truncate">{repo.fullName}</p>
+                  {repo.description && (
+                    <p className="text-[9px] text-gray-400 truncate">{repo.description}</p>
+                  )}
+                </div>
+                {sel && repo.branches && repo.branches.length > 0 && (
+                  <div className="relative flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setOpenBranchDropdown(
+                        openBranchDropdown === repo.fullName ? null : repo.fullName
+                      )}
+                      className="flex items-center gap-1 text-[10px] rounded-lg border border-indigo-200 bg-white px-2 py-0.5 text-indigo-700 hover:bg-indigo-50 transition"
+                    >
+                      <GitBranch className="h-2.5 w-2.5" />
+                      {selectedBranchFor(repo.fullName) || repo.defaultBranch}
+                      <ChevronDown className="h-2.5 w-2.5" />
+                    </button>
+                    {openBranchDropdown === repo.fullName && (
+                      <div className="absolute right-0 top-full mt-1 z-30 w-36 rounded-xl border border-gray-200 bg-white shadow-lg py-1 max-h-40 overflow-y-auto">
+                        {repo.branches.map(b => (
+                          <button
+                            key={b}
+                            type="button"
+                            onClick={() => setBranch(repo.fullName, b)}
+                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 transition ${
+                              selectedBranchFor(repo.fullName) === b ? 'text-indigo-700 font-semibold' : 'text-gray-700'
+                            }`}
+                          >
+                            {b}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {!sel && (
+                  <span className="text-[9px] text-gray-400 flex-shrink-0">{repo.defaultBranch}</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Step 2: Configuration Form ─────────────────────────────────────────────────
 
 function ConfigForm({ type, connector, onSaved }) {
@@ -82,6 +222,10 @@ function ConfigForm({ type, connector, onSaved }) {
   const [testing, setTesting] = useState(false)
   const [oauthStatus, setOauthStatus] = useState(null) // null | 'pending' | 'connected' | 'error'
   const pollRef = useRef(null)
+  // GitHub-specific: selected repos/branches stored in connector config
+  const [selectedRepos, setSelectedRepos] = useState(
+    connector?.config?.selectedRepos ?? []
+  )
 
   const initiateOAuth = async () => {
     if (!name.trim()) { toast.error('Enter a display name first'); return }
@@ -139,7 +283,17 @@ function ConfigForm({ type, connector, onSaved }) {
     if (!name.trim()) { toast.error('Display name is required'); return }
     setSaving(true)
     try {
-      const payload = { connectorType: type, name: name.trim(), credentials, enabled: true, readOnly: isDocuments ? false : readOnly }
+      const configPayload = type === 'GITHUB' && selectedRepos.length > 0
+        ? { selectedRepos }
+        : undefined
+      const payload = {
+        connectorType: type,
+        name: name.trim(),
+        credentials,
+        config: configPayload,
+        enabled: true,
+        readOnly: isDocuments ? false : readOnly,
+      }
       if (isEdit) {
         await client.put(`/connectors/${connector.id}`, payload)
         toast.success('Connector updated')
@@ -299,6 +453,22 @@ function ConfigForm({ type, connector, onSaved }) {
             </div>
           ))
         }
+
+        {/* GitHub repo/branch selector — shown when editing a saved GitHub connector */}
+        {type === 'GITHUB' && isEdit && connector?.id && oauthStatus !== 'connected' && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-gray-100" />
+              <span className="text-[10px] text-gray-400 font-semibold uppercase tracking-wider">Repositories</span>
+              <div className="flex-1 h-px bg-gray-100" />
+            </div>
+            <GitHubRepoSelector
+              connectorId={connector.id}
+              initialSelected={selectedRepos}
+              onChange={setSelectedRepos}
+            />
+          </>
+        )}
       </div>
 
       {/* Action buttons */}

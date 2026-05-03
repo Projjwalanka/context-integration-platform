@@ -27,4 +27,6 @@ public interface KgEntityRepository extends MongoRepository<KgEntity, String> {
     long countByTenantIdAndDeprecatedFalse(String tenantId);
 
     long countByTenantIdAndEntityTypeAndDeprecatedFalse(String tenantId, String entityType);
+
+    void deleteByTenantId(String tenantId);
 }

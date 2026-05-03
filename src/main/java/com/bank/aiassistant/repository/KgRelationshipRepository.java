@@ -24,4 +24,6 @@ public interface KgRelationshipRepository extends MongoRepository<KgRelationship
     void deleteByTenantIdAndSourceEntityId(String tenantId, String sourceEntityId);
 
     void deleteByTenantIdAndTargetEntityId(String tenantId, String targetEntityId);
+
+    void deleteByTenantId(String tenantId);
 }

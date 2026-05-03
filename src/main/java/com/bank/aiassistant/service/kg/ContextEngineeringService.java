@@ -64,7 +64,7 @@ public class ContextEngineeringService {
         List<String> subQueries = decomposeQuery(query, intent);
 
         // Step 3 — Hybrid retrieval
-        KnowledgeGraphService.GraphSubgraph kgSubgraph = retrieveFromKg(tenantId, subQueries);
+        KnowledgeGraphService.GraphSubgraph kgSubgraph = retrieveFromKg(tenantId, subQueries, intent);
         List<Document> vectorDocs = retrieveFromVectorStore(query, userId, connectorIds);
 
         // Step 4 — Optimise (dedup + rank + token budget)
@@ -85,6 +85,12 @@ public class ContextEngineeringService {
     private QueryIntent detectIntent(String query) {
         String lower = query.toLowerCase();
 
+        // API catalog queries must be detected before CODE_QUESTION (which also matches "api")
+        // Note: "end points" (two words) and "endpoints" (one word) are both handled
+        if (isCatalogListing(lower) && anyContains(lower,
+                "api","endpoint","end point","rest","route","controller","path","method")) {
+            return QueryIntent.API_CATALOG;
+        }
         if (anyContains(lower, "code","implement","function","class","method","api","endpoint","module","service","interface")) {
             return QueryIntent.CODE_QUESTION;
         }
@@ -101,6 +107,20 @@ public class ContextEngineeringService {
             return QueryIntent.PEOPLE_QUERY;
         }
         return QueryIntent.GENERAL_QUESTION;
+    }
+
+    private boolean isCatalogListing(String lower) {
+        return anyContains(lower,
+                // explicit "all X" patterns
+                "list all","list the","show all","show me all","give me all","give me list",
+                "enumerate","what are all","what are the",
+                "all the apis","all the endpoints","all the end points",
+                "all apis","all endpoints","all end points","all rest","all routes","all controllers",
+                // "a list of" / "list of all" variants
+                "give me a list","a list of all","list of all","a list of the",
+                // simpler triggers
+                "list rest","list api","list endpoint","list end point",
+                "show rest","show api","show endpoint","show end point");
     }
 
     private boolean anyContains(String text, String... keywords) {
@@ -156,8 +176,21 @@ public class ContextEngineeringService {
     // Step 3 — Hybrid Retrieval
     // ─────────────────────────────────────────────────────────────────────────
 
-    private KnowledgeGraphService.GraphSubgraph retrieveFromKg(String tenantId, List<String> subQueries) {
+    private KnowledgeGraphService.GraphSubgraph retrieveFromKg(String tenantId,
+                                                                List<String> subQueries,
+                                                                QueryIntent intent) {
         if ("default".equals(tenantId)) return KnowledgeGraphService.GraphSubgraph.empty();
+
+        // For catalog queries, do a direct type-based lookup — no keyword guessing needed
+        if (intent == QueryIntent.API_CATALOG) {
+            KnowledgeGraphService.GraphSubgraph catalog = kgService.findByEntityType(tenantId, "API_ENDPOINT");
+            if (!catalog.entities().isEmpty()) return catalog;
+            // Fallback 1: FUNCTION entities (controller handler methods)
+            KnowledgeGraphService.GraphSubgraph fns = kgService.findByEntityType(tenantId, "FUNCTION");
+            if (!fns.entities().isEmpty()) return fns;
+            // Fallback 2: SERVICE-level entities
+            return kgService.findByEntityType(tenantId, "SERVICE");
+        }
 
         // Extract unique keywords from all sub-queries
         Set<String> keywords = new LinkedHashSet<>();
@@ -210,6 +243,30 @@ public class ContextEngineeringService {
 
         // ── Knowledge Graph section ──────────────────────────────────────────
         if (!kgSubgraph.entities().isEmpty()) {
+
+            // API catalog — structured endpoint listing
+            if (intent == QueryIntent.API_CATALOG) {
+                sb.append("## REST API Catalog (from Knowledge Graph)\n");
+                sb.append("*All indexed REST API endpoints for this system:*\n\n");
+                kgSubgraph.entities().stream()
+                        .filter(e -> "API_ENDPOINT".equals(e.getEntityType()) || "SERVICE".equals(e.getEntityType()))
+                        .forEach(e -> {
+                            String method = e.getProperties() != null
+                                    ? String.valueOf(e.getProperties().getOrDefault("method", "")).toUpperCase()
+                                    : "";
+                            String path = e.getProperties() != null
+                                    ? String.valueOf(e.getProperties().getOrDefault("path", e.getName()))
+                                    : e.getName();
+                            sb.append("- ");
+                            if (!method.isBlank() && !"NULL".equals(method)) sb.append("**").append(method).append("** ");
+                            sb.append(path);
+                            if (e.getDescription() != null && !e.getDescription().isBlank()) {
+                                sb.append(" — ").append(e.getDescription());
+                            }
+                            sb.append("\n");
+                        });
+                sb.append("\n");
+            } else {
             sb.append("## Knowledge Graph Context\n");
             sb.append("*Entities and relationships retrieved from the enterprise knowledge graph:*\n\n");
 
@@ -243,6 +300,7 @@ public class ContextEngineeringService {
                 });
             }
             sb.append("\n");
+            } // end else (non-catalog)
         }
 
         // ── Vector document section ──────────────────────────────────────────
@@ -285,8 +343,8 @@ public class ContextEngineeringService {
     // ─────────────────────────────────────────────────────────────────────────
 
     public enum QueryIntent {
-        CODE_QUESTION, TICKET_QUERY, DOCUMENT_LOOKUP, PROCESS_QUESTION,
-        PEOPLE_QUERY, GENERAL_QUESTION
+        API_CATALOG, CODE_QUESTION, TICKET_QUERY, DOCUMENT_LOOKUP,
+        PROCESS_QUESTION, PEOPLE_QUERY, GENERAL_QUESTION
     }
 
     public record EngineeredContext(

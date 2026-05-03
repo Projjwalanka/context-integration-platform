@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   GitBranch, Activity, Network, RefreshCw,
-  Layers, Grid3x3, ListTree, X,
+  Layers, Grid3x3, ListTree, X, Trash2, AlertTriangle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import KnowledgeGraphPanel from '../components/kg/KnowledgeGraphPanel'
@@ -9,6 +9,8 @@ import PipelineMonitor from '../components/kg/PipelineMonitor'
 import SystemGraphView from '../components/skg/SystemGraphView'
 import { LayeredView, MatrixView, TreeView } from '../components/skg/GraphVisualizations'
 import useSkgStore from '../store/skgStore'
+import useKgStore from '../store/kgStore'
+import toast from 'react-hot-toast'
 
 const NODE_TYPE_COLORS = {
   Service:    '#4C8BF5', Module: '#00BCD4', Component: '#8BC34A',
@@ -133,15 +135,84 @@ function InfoRow({ label, value }) {
   )
 }
 
+// ── Clear-all confirmation dialog ───────────────────────────────────────────
+function ClearKgDialog({ onConfirm, onCancel, clearing }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="w-full max-w-sm rounded-2xl bg-white shadow-2xl p-6"
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle className="h-5 w-5 text-red-600" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Clear All Knowledge Graph Data</h3>
+            <p className="text-xs text-gray-500 mt-0.5">This action cannot be undone</p>
+          </div>
+        </div>
+        <p className="text-xs text-gray-600 mb-5 leading-relaxed">
+          Permanently removes <strong>all entities &amp; relationships</strong> (MongoDB),
+          all <strong>Neo4j graph nodes</strong>, all <strong>Pinecone vector embeddings</strong>,
+          and all indexed document records for your account.
+        </p>
+        <div className="flex gap-2">
+          <button
+            onClick={onCancel}
+            disabled={clearing}
+            className="flex-1 rounded-xl border border-gray-200 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={clearing}
+            className="flex-1 rounded-xl bg-red-600 py-2 text-xs font-semibold text-white hover:bg-red-700 transition disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            {clearing
+              ? <><RefreshCw className="h-3 w-3 animate-spin" /> Clearing…</>
+              : <><Trash2 className="h-3 w-3" /> Clear Everything</>}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 // ── Main Page ───────────────────────────────────────────────────────────────
 export default function KnowledgePage() {
   const [activeTab, setActiveTab] = useState('skg')
   const [viewMode, setViewMode]   = useState('force')
+  const [showClearDialog, setShowClearDialog] = useState(false)
+  const [clearing, setClearing] = useState(false)
+
   const {
     selectedNode, nodeDetail, nodeDetailLoading,
     clearSelectedNode, fetchStats, fetchGraph, stats,
     refreshAll, refreshLoading,
   } = useSkgStore()
+
+  const { clearAllData, fetchStats: fetchKgStats, fetchEntities } = useKgStore()
+
+  const handleClearAll = async () => {
+    setClearing(true)
+    try {
+      await clearAllData()
+      toast.success('All knowledge graph data cleared successfully')
+      setShowClearDialog(false)
+      // Refresh both graph stores so counts update immediately
+      fetchStats()
+      fetchGraph()
+      fetchKgStats()
+      fetchEntities()
+    } catch {
+      toast.error('Failed to clear knowledge graph data')
+    } finally {
+      setClearing(false)
+    }
+  }
 
   useEffect(() => {
     fetchStats()
@@ -152,6 +223,16 @@ export default function KnowledgePage() {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
+      <AnimatePresence>
+        {showClearDialog && (
+          <ClearKgDialog
+            onConfirm={handleClearAll}
+            onCancel={() => setShowClearDialog(false)}
+            clearing={clearing}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Top nav */}
       <div className="flex items-center gap-1 px-4 py-2.5 border-b border-gray-100 bg-white flex-shrink-0">
         <div className="flex items-center gap-2 mr-4">
@@ -204,18 +285,29 @@ export default function KnowledgePage() {
           </div>
         </div>
 
-        {/* Refresh KG (uses existing connectors) */}
-        {activeTab === 'skg' && (
+        {/* Right-side actions — always visible */}
+        <div className="ml-auto flex items-center gap-2">
+          {activeTab === 'skg' && (
+            <button
+              onClick={refreshAll}
+              disabled={isRefreshing}
+              className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60 transition"
+              title="Re-ingest from already-configured GitHub / Confluence / Jira connectors"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>{isRefreshing ? 'Refreshing…' : 'Refresh Graph'}</span>
+            </button>
+          )}
+
           <button
-            onClick={refreshAll}
-            disabled={isRefreshing}
-            className="ml-auto flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium bg-indigo-50 text-indigo-700 hover:bg-indigo-100 disabled:opacity-60 transition"
-            title="Re-ingest from already-configured GitHub / Confluence / Jira connectors"
+            onClick={() => setShowClearDialog(true)}
+            className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium bg-red-50 text-red-600 hover:bg-red-100 transition"
+            title="Remove all knowledge graph data from Neo4j, MongoDB and Pinecone"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-            <span>{isRefreshing ? 'Refreshing…' : 'Refresh Knowledge Graph'}</span>
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>Clear All Data</span>
           </button>
-        )}
+        </div>
       </div>
 
       {/* View-mode bar (only on SKG tab) */}

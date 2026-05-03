@@ -22,6 +22,7 @@ public class IngestionDocument {
     @Indexed
     private String connectorId;
 
+    @Indexed
     private String ownerId;
 
     @Builder.Default
@@ -30,6 +31,16 @@ public class IngestionDocument {
     private Integer chunksCount;
 
     private List<String> vectorIds;
+
+    /**
+     * First {@value com.bank.aiassistant.service.ingestion.IngestionPipeline#TEXT_PREVIEW_CHARS}
+     * characters of the raw extracted text.
+     *
+     * <p>Stored at ingestion time so the Neo4j SKG refresh path can reconstruct
+     * Document nodes and {@code DESCRIBES} edges without needing to fetch content
+     * back from Pinecone.
+     */
+    private String textPreview;
 
     private String errorMessage;
 

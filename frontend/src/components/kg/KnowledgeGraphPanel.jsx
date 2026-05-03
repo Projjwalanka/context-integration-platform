@@ -2,10 +2,12 @@ import { useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, RefreshCw, Trash2, ChevronRight, X,
-  GitBranch, FileText, User, Code, Lightbulb, BookOpen, Layers
+  GitBranch, FileText, User, Code, Lightbulb, BookOpen, Layers,
+  AlertTriangle
 } from 'lucide-react'
 import useKgStore from '../../store/kgStore'
 import { format } from 'date-fns'
+import toast from 'react-hot-toast'
 
 const ENTITY_ICONS = {
   PERSON:          User,
@@ -63,16 +65,76 @@ function RelationshipLine({ rel, entityMap }) {
   )
 }
 
+function ClearAllConfirmDialog({ onConfirm, onCancel, clearing }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="w-full max-w-sm rounded-2xl bg-white shadow-2xl p-6"
+      >
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+            <AlertTriangle className="h-5 w-5 text-red-600" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-gray-900">Clear All Knowledge Graph Data</h3>
+            <p className="text-xs text-gray-500 mt-0.5">This action cannot be undone</p>
+          </div>
+        </div>
+        <p className="text-xs text-gray-600 mb-5 leading-relaxed">
+          This will permanently delete <strong>all entities, relationships</strong> from MongoDB,
+          all <strong>Neo4j graph nodes</strong>, all <strong>Pinecone vector embeddings</strong>,
+          and all indexed document records for your account.
+        </p>
+        <div className="flex gap-2">
+          <button
+            onClick={onCancel}
+            disabled={clearing}
+            className="flex-1 rounded-xl border border-gray-200 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={clearing}
+            className="flex-1 rounded-xl bg-red-600 py-2 text-xs font-semibold text-white hover:bg-red-700 transition disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            {clearing ? <><RefreshCw className="h-3 w-3 animate-spin" /> Clearing…</> : 'Yes, Clear Everything'}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 export default function KnowledgeGraphPanel() {
   const {
     stats, statsLoading,
     entities, entitiesLoading, entityFilter,
     selectedEntity, neighbours, neighboursLoading,
     fetchStats, fetchEntities, selectEntity, clearSelectedEntity, deleteEntity,
+    clearAllData,
   } = useKgStore()
 
   const [searchInput, setSearchInput] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [clearing, setClearing] = useState(false)
+
+  const handleClearAll = async () => {
+    setClearing(true)
+    try {
+      await clearAllData()
+      toast.success('All knowledge graph data cleared successfully')
+      setShowClearConfirm(false)
+      fetchStats()
+    } catch {
+      toast.error('Failed to clear knowledge graph data')
+    } finally {
+      setClearing(false)
+    }
+  }
 
   useEffect(() => {
     fetchStats()
@@ -96,6 +158,14 @@ export default function KnowledgeGraphPanel() {
     : {}
 
   return (
+    <>
+    {showClearConfirm && (
+      <ClearAllConfirmDialog
+        onConfirm={handleClearAll}
+        onCancel={() => setShowClearConfirm(false)}
+        clearing={clearing}
+      />
+    )}
     <div className="flex h-full overflow-hidden">
       {/* Left panel — Entity list */}
       <div className="w-80 border-r border-gray-100 flex flex-col flex-shrink-0 overflow-hidden">
@@ -103,12 +173,21 @@ export default function KnowledgeGraphPanel() {
         <div className="px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-indigo-50 to-blue-50">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold text-gray-700">Knowledge Graph</span>
-            <button
-              onClick={() => { fetchStats(); fetchEntities(entityFilter) }}
-              className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60 transition"
-            >
-              <RefreshCw className={`h-3 w-3 ${statsLoading ? 'animate-spin' : ''}`} />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setShowClearConfirm(true)}
+                title="Clear all knowledge graph data"
+                className="p-1 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => { fetchStats(); fetchEntities(entityFilter) }}
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-white/60 transition"
+              >
+                <RefreshCw className={`h-3 w-3 ${statsLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-white/70 rounded-xl p-2 text-center">
@@ -374,5 +453,6 @@ export default function KnowledgeGraphPanel() {
         </AnimatePresence>
       </div>
     </div>
+    </>
   )
 }

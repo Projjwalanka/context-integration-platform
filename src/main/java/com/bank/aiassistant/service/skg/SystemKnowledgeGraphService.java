@@ -167,23 +167,24 @@ public class SystemKnowledgeGraphService {
                 .one();
     }
 
-    /** BFS traversal from a set of seed node IDs up to maxHops hops. */
+    /** BFS traversal from a set of seed node IDs up to maxHops hops.
+     *  NOTE: Neo4j does not allow parameters in variable-length path bounds ([*0..$hops]),
+     *  so the hop count is inlined as a literal in the query string. */
     public List<SkgNodeDto> traverse(String tenantId, List<String> seedIds, int maxHops) {
         int hops = Math.min(maxHops, 5);
+        // Inline the hop count as a literal — parameters are forbidden in [*min..max] syntax
+        String cypher = "MATCH (seed:SkgNode {tenantId: $tenantId}) " +
+                        "WHERE seed.id IN $seedIds " +
+                        "MATCH (seed)-[*0.." + hops + "]-(neighbor:SkgNode {tenantId: $tenantId}) " +
+                        "RETURN DISTINCT neighbor.id as id, neighbor.nodeType as nodeType, " +
+                        "neighbor.layer as layer, neighbor.name as name, " +
+                        "neighbor.description as description, neighbor.sourceRef as sourceRef, " +
+                        "neighbor.createdAt as createdAt, neighbor.updatedAt as updatedAt " +
+                        "LIMIT 200";
         try {
-            return neo4jClient.query("""
-                            MATCH (seed:SkgNode {tenantId: $tenantId})
-                            WHERE seed.id IN $seedIds
-                            MATCH (seed)-[*0..$hops]-(neighbor:SkgNode {tenantId: $tenantId})
-                            RETURN DISTINCT neighbor.id as id, neighbor.nodeType as nodeType,
-                                   neighbor.layer as layer, neighbor.name as name,
-                                   neighbor.description as description, neighbor.sourceRef as sourceRef,
-                                   neighbor.createdAt as createdAt, neighbor.updatedAt as updatedAt
-                            LIMIT 200
-                            """)
+            return neo4jClient.query(cypher)
                     .bind(tenantId).to("tenantId")
                     .bind(seedIds).to("seedIds")
-                    .bind(hops).to("hops")
                     .fetchAs(SkgNodeDto.class)
                     .mappedBy((ts, r) -> mapNode(r))
                     .all()
@@ -217,6 +218,31 @@ public class SystemKnowledgeGraphService {
                     .toList();
         } catch (Exception e) {
             log.error("Impact analysis failed for node {}: {}", nodeId, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Find nodes whose name OR description contains the keyword. */
+    public List<SkgNodeDto> searchNodesByDescription(String tenantId, String keyword) {
+        if (keyword == null || keyword.isBlank()) return List.of();
+        try {
+            return neo4jClient.query("""
+                            MATCH (n:SkgNode {tenantId: $tenantId})
+                            WHERE toLower(n.description) CONTAINS toLower($keyword)
+                              AND NOT toLower(n.name) CONTAINS toLower($keyword)
+                            RETURN n.id as id, n.nodeType as nodeType, n.layer as layer,
+                                   n.name as name, n.description as description,
+                                   n.sourceRef as sourceRef, n.createdAt as createdAt, n.updatedAt as updatedAt
+                            LIMIT 30
+                            """)
+                    .bind(tenantId).to("tenantId")
+                    .bind(keyword).to("keyword")
+                    .fetchAs(SkgNodeDto.class)
+                    .mappedBy((ts, r) -> mapNode(r))
+                    .all()
+                    .stream().toList();
+        } catch (Exception e) {
+            log.warn("Description search failed for keyword {}: {}", keyword, e.getMessage());
             return List.of();
         }
     }

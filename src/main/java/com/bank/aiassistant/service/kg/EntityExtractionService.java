@@ -33,7 +33,10 @@ public class EntityExtractionService {
     private final KnowledgeGraphService kgService;
     private final ObjectMapper objectMapper;
 
-    private static final int MAX_CONTENT_CHARS = 3_000;
+    /** Each chunk sent to the LLM for extraction. */
+    private static final int CHUNK_SIZE      = 3_000;
+    /** Maximum number of chunks processed per document (3 k × 5 = 15 k chars). */
+    private static final int MAX_CHUNKS      = 5;
 
     private static final String EXTRACTION_PROMPT = """
             Analyze the following content and extract a knowledge graph.
@@ -80,7 +83,13 @@ public class EntityExtractionService {
 
     /**
      * Extract entities + relationships from free-form text and persist to KG.
-     * Runs asynchronously — caller gets a future with the extraction result.
+     *
+     * <p>Content is split into {@value #CHUNK_SIZE}-character chunks and each
+     * chunk is sent to the LLM independently (up to {@value #MAX_CHUNKS} chunks).
+     * Results are merged by entity name before persisting, so a 15-page PDF is
+     * fully mined rather than silently truncated to the first 3 000 characters.
+     *
+     * <p>Runs asynchronously — caller gets a future with the merged result.
      */
     @Async
     public CompletableFuture<ExtractionResult> extractAndStore(
@@ -90,25 +99,69 @@ public class EntityExtractionService {
             String sourceRef,
             String sourceType) {
 
-        String truncated = content.length() > MAX_CONTENT_CHARS
-                ? content.substring(0, MAX_CONTENT_CHARS)
-                : content;
+        List<String> chunks = splitIntoChunks(content, CHUNK_SIZE);
+        List<ExtractionResult> chunkResults = new ArrayList<>();
 
-        try {
-            String prompt   = EXTRACTION_PROMPT.formatted(truncated);
-            String response = chatClient.prompt().user(prompt).call().content();
-            ExtractionResult result = parseResponse(response, tenantId, connectorId, sourceRef, sourceType);
-            persistResult(result);
+        int processed = 0;
+        for (String chunk : chunks) {
+            if (processed >= MAX_CHUNKS) break;
+            try {
+                String prompt   = EXTRACTION_PROMPT.formatted(chunk);
+                String response = chatClient.prompt().user(prompt).call().content();
+                chunkResults.add(parseResponse(response, tenantId, connectorId, sourceRef, sourceType));
+                processed++;
+            } catch (Exception e) {
+                log.warn("Chunk {} extraction failed for '{}': {}", processed + 1, sourceRef, e.getMessage());
+            }
+        }
 
-            log.info("KG extraction: {} entities, {} rels from '{}' (tenant={})",
-                    result.entities().size(), result.relationships().size(), sourceRef, tenantId);
-
-            return CompletableFuture.completedFuture(result);
-
-        } catch (Exception e) {
-            log.warn("Entity extraction failed for '{}': {}", sourceRef, e.getMessage());
+        if (chunkResults.isEmpty()) {
             return CompletableFuture.completedFuture(ExtractionResult.empty());
         }
+
+        ExtractionResult merged = mergeResults(chunkResults);
+        persistResult(merged);
+
+        log.info("KG extraction: {} entities, {} rels from '{}' ({} chunks, tenant={})",
+                merged.entities().size(), merged.relationships().size(),
+                sourceRef, processed, tenantId);
+
+        return CompletableFuture.completedFuture(merged);
+    }
+
+    /** Splits content into chunks of at most {@code size} characters on whitespace boundaries. */
+    private List<String> splitIntoChunks(String content, int size) {
+        List<String> chunks = new ArrayList<>();
+        int len = content.length();
+        int start = 0;
+        while (start < len) {
+            int end = Math.min(start + size, len);
+            // Try to break on a whitespace boundary to avoid cutting mid-word
+            if (end < len) {
+                int ws = content.lastIndexOf(' ', end);
+                if (ws > start) end = ws;
+            }
+            chunks.add(content.substring(start, end).trim());
+            start = end;
+        }
+        return chunks;
+    }
+
+    /**
+     * Merges extraction results from multiple chunks.
+     * Entities are deduplicated by name (first occurrence wins).
+     * Relationships are collected from all chunks.
+     */
+    private ExtractionResult mergeResults(List<ExtractionResult> results) {
+        Map<String, KgEntity> entityByName = new java.util.LinkedHashMap<>();
+        List<KgRelationship> allRels = new ArrayList<>();
+        for (ExtractionResult r : results) {
+            for (KgEntity e : r.entities()) {
+                entityByName.putIfAbsent(e.getName(), e);
+            }
+            allRels.addAll(r.relationships());
+        }
+        return new ExtractionResult(new ArrayList<>(entityByName.values()), allRels);
     }
 
     /**

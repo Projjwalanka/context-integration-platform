@@ -1,5 +1,7 @@
 package com.bank.aiassistant.service.vector;
 
+import com.bank.aiassistant.model.entity.IngestionDocument;
+import com.bank.aiassistant.repository.IngestionDocumentRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
@@ -10,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Abstraction over the Spring AI {@link VectorStore} (Pinecone backend).
@@ -34,6 +37,7 @@ import java.util.Map;
 public class VectorStoreService {
 
     private final VectorStore vectorStore;
+    private final IngestionDocumentRepository ingestionDocumentRepository;
 
     private static final int DEFAULT_TOP_K = 8;
     private static final double DEFAULT_SIMILARITY_THRESHOLD = 0.30;
@@ -51,6 +55,25 @@ public class VectorStoreService {
     public void delete(List<String> ids) {
         vectorStore.delete(ids);
         log.info("Deleted {} chunks from vector store", ids.size());
+    }
+
+    /**
+     * Deletes all Pinecone vectors tracked by IngestionDocuments for the given
+     * connector IDs, then removes the IngestionDocument records themselves.
+     */
+    public void clearForConnectors(String ownerId, List<String> connectorIds) {
+        if (connectorIds == null || connectorIds.isEmpty()) return;
+        List<IngestionDocument> docs = ingestionDocumentRepository
+                .findByOwnerIdAndConnectorIdIn(ownerId, connectorIds);
+        List<String> vectorIds = docs.stream()
+                .filter(d -> d.getVectorIds() != null)
+                .flatMap(d -> d.getVectorIds().stream())
+                .collect(Collectors.toList());
+        if (!vectorIds.isEmpty()) {
+            vectorStore.delete(vectorIds);
+            log.info("Cleared {} Pinecone vectors for owner={} connectors={}", vectorIds.size(), ownerId, connectorIds);
+        }
+        ingestionDocumentRepository.deleteByConnectorIdIn(connectorIds);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

@@ -117,7 +117,6 @@ public class ChatService {
         );
     }
 
-    @Transactional
     public Flux<String> chatStream(ChatRequest request, String userEmail) {
         User user = resolveUser(userEmail);
         String sanitizedInput = guardrailChain.checkInput(request.message(), userEmail);

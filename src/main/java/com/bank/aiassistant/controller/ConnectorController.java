@@ -8,6 +8,7 @@ import com.bank.aiassistant.repository.ConnectorConfigRepository;
 import com.bank.aiassistant.repository.UserRepository;
 import com.bank.aiassistant.service.connector.ConnectorCredentialService;
 import com.bank.aiassistant.service.connector.ConnectorRegistry;
+import com.bank.aiassistant.service.connector.github.GitHubConnector;
 import com.bank.aiassistant.service.connector.github.GitHubConnectorSyncService;
 import com.bank.aiassistant.service.connector.spi.ConnectorHealth;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -35,6 +36,7 @@ public class ConnectorController {
     private final ConnectorCredentialService credentialService;
     private final ConnectorRegistry connectorRegistry;
     private final GitHubConnectorSyncService gitHubConnectorSyncService;
+    private final GitHubConnector gitHubConnector;
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
 
@@ -137,6 +139,25 @@ public class ConnectorController {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Connector not found"));
         ConnectorHealth health = connectorRegistry.healthCheck(id);
         return ResponseEntity.ok(health);
+    }
+
+    @GetMapping("/{id}/github/repos")
+    public ResponseEntity<?> listGithubRepos(
+            @PathVariable String id,
+            @AuthenticationPrincipal UserDetails principal) {
+        var user = resolveUser(principal);
+        var config = connectorConfigRepository.findByIdAndOwnerId(id, user.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Connector not found"));
+        if (!"GITHUB".equalsIgnoreCase(config.getConnectorType())) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("message", "This endpoint is only available for GitHub connectors"));
+        }
+        try {
+            return ResponseEntity.ok(gitHubConnector.listReposWithBranches(config));
+        } catch (Exception ex) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(Map.of("message", "Failed to fetch repositories: " + ex.getMessage()));
+        }
     }
 
     @PostMapping("/{id}/sync")
