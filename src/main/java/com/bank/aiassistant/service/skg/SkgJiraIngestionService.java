@@ -27,16 +27,37 @@ public class SkgJiraIngestionService {
 
     @Async
     public void ingestAsync(String tenantId, String connectorId) {
-        ingest(tenantId, connectorId);
+        ingest(tenantId, connectorId, null);
+    }
+
+    /**
+     * Async variant that accepts pre-fetched entries so the caller (e.g.
+     * {@link com.bank.aiassistant.service.ingestion.ConnectorIngestionScheduler}) can
+     * share a single {@code fetchAll()} call between vector ingestion and SKG node creation,
+     * avoiding a second round-trip to the Jira API.
+     */
+    @Async
+    public void ingestAsync(String tenantId, String connectorId,
+                            List<Map.Entry<String, Map<String, Object>>> preloadedEntries) {
+        ingest(tenantId, connectorId, preloadedEntries);
     }
 
     public IngestionStatusService.IngestionSummary ingest(String tenantId, String connectorId) {
+        return ingest(tenantId, connectorId, null);
+    }
+
+    /**
+     * Core ingestion logic. If {@code preloadedEntries} is non-null it is used directly;
+     * otherwise the entries are fetched from the connector via {@link ConnectorRegistry#fetchAll}.
+     */
+    public IngestionStatusService.IngestionSummary ingest(String tenantId, String connectorId,
+            List<Map.Entry<String, Map<String, Object>>> preloadedEntries) {
         statusService.markRunning(tenantId, "JIRA", connectorId);
         int created = 0, edges = 0;
         try {
-            // fetchAll returns List<Map.Entry<content (summary), metadata>>
-            List<Map.Entry<String, Map<String, Object>>> entries =
-                    connectorRegistry.fetchAll(connectorId);
+            List<Map.Entry<String, Map<String, Object>>> entries = preloadedEntries != null
+                    ? preloadedEntries
+                    : connectorRegistry.fetchAll(connectorId);
 
             for (Map.Entry<String, Map<String, Object>> entry : entries) {
                 String summary = entry.getKey();                   // Issue summary text

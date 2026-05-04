@@ -113,7 +113,12 @@ public class OAuthController {
                     ? "GitHub OAuth is not configured. Set the GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET environment variables, then register a GitHub OAuth App with callback URL: " + serverUrl + "/api/connectors/oauth/callback"
                     : null;
             case "JIRA", "CONFLUENCE" -> (atlassianClientId == null || atlassianClientId.isBlank())
-                    ? "Atlassian OAuth is not configured. Set the ATLASSIAN_CLIENT_ID and ATLASSIAN_CLIENT_SECRET environment variables, then create an Atlassian OAuth 2.0 app at developer.atlassian.com."
+                    ? "Atlassian OAuth is not configured (ATLASSIAN_CLIENT_ID / ATLASSIAN_CLIENT_SECRET env vars are missing). " +
+                      "Quick alternative: add your " + type + " connector using an API Token instead — " +
+                      "go to Settings → Connectors → Add Connector, choose " + type + ", and enter your " +
+                      "Atlassian base URL (e.g. https://yoursite.atlassian.net), email, and an API token from " +
+                      "https://id.atlassian.com/manage-profile/security/api-tokens. " +
+                      "To enable OAuth, create an OAuth 2.0 (3LO) app at developer.atlassian.com and set the environment variables."
                     : null;
             case "SHAREPOINT" -> (microsoftClientId == null || microsoftClientId.isBlank())
                     ? "Microsoft OAuth is not configured. Set the MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET environment variables via Azure AD app registration."

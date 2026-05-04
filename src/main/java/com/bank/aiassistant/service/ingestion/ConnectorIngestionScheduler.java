@@ -5,8 +5,10 @@ import com.bank.aiassistant.model.entity.ConnectorConfig;
 import com.bank.aiassistant.repository.ConnectorConfigRepository;
 import com.bank.aiassistant.service.connector.ConnectorRegistry;
 import com.bank.aiassistant.service.kg.CdcSyncService;
+import com.bank.aiassistant.service.skg.SkgJiraIngestionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 

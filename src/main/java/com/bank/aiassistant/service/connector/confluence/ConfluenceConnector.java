@@ -10,8 +10,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.ExchangeStrategies;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.*;
 
@@ -74,13 +77,50 @@ public class ConfluenceConnector implements DataSourceConnector {
     public boolean supportsBatchIngestion() { return true; }
 
     private WebClient buildClient(Map<String, String> creds) {
+        String baseUrl   = normalizeBaseUrl(creds.get("baseUrl"));
+        String email     = trim(creds.get("email"));
+        String apiToken  = trim(creds.get("apiToken"));
+
+        if (email.isEmpty() || apiToken.isEmpty()) {
+            log.warn("Confluence buildClient: missing credentials — email present={} token present={}",
+                    !email.isEmpty(), !apiToken.isEmpty());
+        }
+
         String auth = Base64.getEncoder().encodeToString(
-                (creds.get("email") + ":" + creds.get("apiToken")).getBytes());
+                (email + ":" + apiToken).getBytes(StandardCharsets.UTF_8));
+
+        // Increase codec buffer to 10 MB — Confluence page bodies with storage XML
+        // can easily exceed the default 256 KB limit
+        ExchangeStrategies strategies = ExchangeStrategies.builder()
+                .codecs(c -> c.defaultCodecs().maxInMemorySize(10 * 1024 * 1024))
+                .build();
+
         return WebClient.builder()
-                .baseUrl(creds.get("baseUrl"))
+                .baseUrl(baseUrl)
                 .defaultHeader("Authorization", "Basic " + auth)
                 .defaultHeader("Accept", "application/json")
+                .exchangeStrategies(strategies)
                 .build();
+    }
+
+    private static String trim(String value) {
+        return value != null ? value.strip() : "";
+    }
+
+    /**
+     * Normalises the Confluence base URL to scheme+host only.
+     *
+     * <p>Users sometimes paste a full space or page URL as {@code baseUrl}. This
+     * method strips any path/query so only {@code https://acme.atlassian.net} is used.
+     */
+    private static String normalizeBaseUrl(String raw) {
+        if (raw == null || raw.isBlank()) return raw;
+        try {
+            URI uri = URI.create(raw.trim());
+            return uri.getScheme() + "://" + uri.getHost();
+        } catch (Exception e) {
+            return raw.trim();
+        }
     }
 
     private List<Map.Entry<String, Map<String, Object>>> parsePages(String json, String baseUrl) {
